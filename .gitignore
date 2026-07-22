@@ -1,0 +1,19 @@
+# data / artifacts (large or regenerable — never push)
+*.parquet
+*.pt
+*.pkl
+*.cbm
+*.npy
+*.csv
+*.log
+*.ipynb
+*.html
+*.png
+*.whl
+train/
+test/
+artifacts*/
+newgru/
+BACKUP*
+*.BACKUP*.ipynb
+__pycache__/
