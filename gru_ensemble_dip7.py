@@ -1,3 +1,8 @@
+# WITHDRAWN 2026-07-25 — the rationale below rested on a CONTAMINATED comparison
+# (CPU dip5 vs GPU dip3). Honest CPU-vs-CPU numbers: 3->5 legs is a SEED SPLIT
+# (s7 6.9610->6.9983 worse, s11 5.7572->5.7412 better) and err-corr vs fleongg
+# RISES with legs (0.7357 -> 0.7459; padded curve 1->5 legs: 0.760->0.800).
+# Do not run without new evidence.
 # Dip 7-leg widening: two more NON-SPATIAL dip legs (_df/_dg). Rationale from the 5-leg
 # gate — going 3->5 legs barely moved standalone clean OOF (6.3516 -> 6.2905) but moved
 # the BLEND a lot (8.0269 -> 7.3586 / 6.4734 -> 6.0188) because err-corr vs fleongg fell
