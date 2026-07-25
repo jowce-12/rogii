@@ -1083,40 +1083,39 @@ gc.collect()
 # top-32 beams temp=8 posterior; stiff=seg_len 400, loose=seg_len 100).
 # HARD requirement, no silent presence-gate (warp lesson): a missing/incomplete join
 # must kill the run, not quietly train a reduced-feature model.
-# 2026-07-25: the four v1 decode columns are REPLACED by the single STRIDE-v3 decode.
-# 150-well proxy (identical folds/params): v1 cols 6.8736 | no stride at all 7.0509 |
-# v3 alone 6.8241 -> one v3 column beats the four v1 columns (importance rank 2/260).
-# Keeping BOTH was much worse (7.1232): the v1-v3 disagreement acts as an attractive
-# nuisance, the same failure mode that killed the xtrk features.
-# PAIRED CHANGE: the submission notebook must feed the same s3_d column (patch51 reuses
-# the v3 decode patch48 already runs per well, so inference cost is zero).
-STRIDE_COLS = ["s3_d"]
-_sj = pd.read_parquet("s3_all.parquet")
-assert all(c in _sj.columns for c in STRIDE_COLS), \
-    f"s3_all.parquet cols {list(_sj.columns)} — rebuild with gen_v3_all.py"
+# 2026-07-25 MEASURED AND REVERTED: swapping the four v1 decode columns for the single
+# STRIDE-v3 column looked good on the 150-well single-LGB proxy (6.8736 -> 6.8241) but
+# made the FULL STACK WORSE (ridge-stack OOF 8.0576 -> 8.1769). Cause is visible in the
+# importances: s3_d alone took 21.8% of gain, all five bases leaned on it, and the ridge
+# collapsed onto lgb0 (0.48) instead of spreading across the five. The v1 quartet's value
+# is DIVERSITY (mean/best/stiff/loose), which one better column cannot replace.
+# Lesson: single-LGB proxy verdicts do not transfer to stack diversity questions.
+STRIDE_COLS = ["stride_d", "stride_best_d", "stride_stiff_d", "stride_loose_d"]
+_sj = pd.read_parquet("stride_join.parquet")
+assert all(c in _sj.columns for c in STRIDE_COLS),     f"stride_join.parquet cols {list(_sj.columns)} — rebuild with build_stride_train_v2.py"
 train_df = train_df.merge(_sj, on="id", how="left")
-_scov = float(train_df["s3_d"].notna().mean())
-assert _scov > 0.95, f"s3_all.parquet coverage {_scov:.3f} — rebuild with gen_v3_all.py"
-# test side: computed live by the SAME decoder that built the train column
-import sys as _s3_sys
-_s3_argv = _s3_sys.argv
-_s3_sys.argv = ["x", "--wlen", "0.5"]
-import stride3 as _stride3_mod
-_s3_sys.argv = _s3_argv
+_scov = float(train_df["stride_d"].notna().mean())
+assert _scov > 0.95, f"stride_join.parquet coverage {_scov:.3f} — rebuild with build_stride_train_v2.py"
+# test side: computed live by the SAME code that built the train columns
 import stride as _stride_mod
 _srows = []
 for _swid in sorted(test_df["well"].unique()):
     _shw, _stw = _stride_mod.load_well(_swid, "test")
-    _sp = _stride3_mod.decode(_shw, _stw)
+    _sp, _sinfo = _stride_mod.stride_track(_shw, _stw)
     if _sp is None:
         continue
     _sev = _shw[_shw["TVT_input"].isna()]
     _slast = float(_shw[_shw["TVT_input"].notna()]["TVT_input"].iloc[-1])
-    _srows.append(pd.DataFrame({"id": [f"{_swid}_{_si}" for _si in _sev.index],
-                                "s3_d": (np.asarray(_sp, float) - _slast).astype(np.float32)}))
+    _row = {"id": [f"{_swid}_{_si}" for _si in _sev.index],
+            "stride_d": (_sp - _slast).astype(np.float32),
+            "stride_best_d": (_sinfo["tvt_best"] - _slast).astype(np.float32)}
+    for _snm, _sseg in (("stride_stiff_d", 400.0), ("stride_loose_d", 100.0)):
+        _spv, _ = _stride_mod.stride_track(_shw, _stw, seg_len=_sseg)
+        _row[_snm] = (_spv - _slast).astype(np.float32) if _spv is not None else np.float32(np.nan)
+    _srows.append(pd.DataFrame(_row))
 if _srows:
     test_df = test_df.merge(pd.concat(_srows, ignore_index=True), on="id", how="left")
-print(f"[stride-feat] v3 train coverage {_scov:.3f} (1 col) | test wells joined {len(_srows)}", flush=True)
+print(f"[stride-feat] train coverage {_scov:.3f} (4 cols) | test wells joined {len(_srows)}", flush=True)
 
 feats = [c for c in train_df.columns if c not in {"well", "id", "target"}
          and not (c.startswith("likpf_scale_") and not c.endswith("_d"))   # keep scale DELTAS (validated -0.45 OOF)
@@ -1161,6 +1160,41 @@ if _resid:
     print(f"[resid] target re-anchored to likpf_mean_d (target std {y.std():.2f} -> residual std {y_fit.std():.2f})", flush=True)
 _folds = int(os.environ.get("ROGII_STACK_FOLDS", str(CFG.n_splits)))
 cv = GroupKFold(_folds)
+# 2026-07-25: GroupKFold assignments CHANGE ACROSS SKLEARN VERSIONS (1.7.2 vs 1.8.0 differ
+# on 75.5% of wells in the GRU pipeline). Pin the well->fold map to a file so successive
+# training runs stay comparable and any offline judgement uses the same split.
+_SFOLD_FILE = "stack_folds.json"
+import json as _sjson
+_swells = sorted(pd.unique(groups))
+if os.path.exists(_SFOLD_FILE):
+    _sfold = {k: int(v) for k, v in _sjson.load(open(_SFOLD_FILE)).items()}
+    print(f"[folds] stack folds pinned from {_SFOLD_FILE} ({len(_sfold)} wells)", flush=True)
+else:
+    _sfold = {}
+    for _f, (_, _va) in enumerate(GroupKFold(_folds).split(_swells, groups=_swells)):
+        for _i in _va:
+            _sfold[_swells[_i]] = _f
+    _sjson.dump(_sfold, open(_SFOLD_FILE, "w"))
+    print(f"[folds] derived and WROTE {_SFOLD_FILE} ({len(_sfold)} wells)", flush=True)
+
+
+class _PinnedGroupKFold:
+    """GroupKFold replacement driven by the pinned well->fold map."""
+    def __init__(self, mapping, n_splits):
+        self.m = mapping; self.n_splits = n_splits
+    def get_n_splits(self, X=None, y=None, groups=None):
+        return self.n_splits
+    def split(self, X, y=None, groups=None):
+        import numpy as _np
+        g = _np.asarray(groups)
+        f = _np.array([self.m.get(w, 0) for w in g])
+        for k in range(self.n_splits):
+            va = _np.where(f == k)[0]
+            tr = _np.where(f != k)[0]
+            yield tr, va
+
+
+cv = _PinnedGroupKFold(_sfold, _folds)
 use_cb = os.environ.get("ROGII_STACK_CB", "1") == "1"
 # GPU probes: fall back to CPU per library if the GPU is not usable (e.g. LightGBM needs OpenCL)
 lgb_dev = _resolve_lgb_device(X, y, dev)   # gpu(OpenCL) -> cuda -> cpu
