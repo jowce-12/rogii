@@ -33,6 +33,21 @@ LB 최고 기록 **6.663** (dip pole 시절). public 1위 6.568 (ultimate 포크
 5. **한 제출에 한 델타** — patch42(gold 풀 확장)를 검증 없이 LB 직행시켜 슬롯 태운 전례. 프리뷰 확인 라인 목록을 매 제출 전 대조.
 6. LB 노이즈 ±0.07. 하네스→LB 전이율은 비-spatial 축에서 대략 50~100%.
 
+## fleongg 심층 세션 결과 (2026-07-25) — 이 모델은 국소 최적
+
+- **메타 계층 종결**: 배포 `Ridge(1.66, positive, +likpf_mean_d)`가 6개 변형을 fleongg 단독·블렌드 모두에서 이김 (단독 8.0401 vs 티어드 8.0621 / 품질피처 8.0707 / LGBM 8.79; 블렌드 6.9983·5.7412 vs 전부 열위). `meta_lab.py`
+- **베이스 모델 종결**: 150우물 프록시 기준선 6.8736 vs huber 7.00 / rate-space 7.11 / 거리 티어드 7.02 / capacity↑ 6.96 / capacity↓ 6.89 — 전부 악화. `measure_base.py`
+- **γ 종결**: 일반 티어 γ(s11 전 구간 악화), 거리 램프(양시드 악화) → 1.09 몬스터 전용 유지. `gamma_lab.log`
+- **진단**: fleongg는 GRU pole 대비 전 구간 열위이고 **컷에서 멀수록 격차 확대**(eval 길이 Q1→Q4 1.33→1.70ft, 공간 고립 Q4 2.39ft) = 행 단위 GBM의 장거리 외삽 한계
+- **미결 카드**: STRIDE-v3를 fleongg 피처로 (`measure_v3feat.py` + `s3_all.parquet`) — 통과 시에만 fleongg 재학습 가치
+
+## test TVT 온라인 활용 (transductive) — 3각도 측정 결과
+
+1. **원리 확인**: 우물별 편향 지속성 실재 (앞/뒤 절반 corr 0.657, 보정 시 9.81→8.02). 단 거리 따라 상관 감쇠(0.67→0.35), 편향 크기는 증가(2.25→6.71ft) = 누적 언더드리프트 = γ가 이미 먹는 축
+2. **값싼 자기보정 기각**: 프리픽스 인위 컷 + v3 백테스트 편향 보정 → s7 corr +0.208 / s11 −0.092 시드 스플릿. `prefix_selfcal.py`
+3. **교차 우물 뱅크 확장 기각**: 테스트 프리픽스를 이웃 표면 뱅크에 투입 → 원시 TVT+Z 100.7→101.7(우물 상수 오염), ANCC 보정 스케일 31.8→37.0(개선 27.5%). 한 우물의 선형 밀집 샘플이 k=20 이웃 독점 + 기존 뱅크 국소 오차 되먹임. `testbank_probe.py`, `testbank2.log`
+4. **유일한 잔여 경로**: fleongg 자신을 인위 컷에서 재예측(피처 재빌드 +1.8h 런타임) → 기대 −0.05~−0.09, freeze 전 수지 불합격
+
 ## 기각된 축 (재시도 금지, 근거는 메모리/로그)
 
 spatial·spatial2 GRU 채널(LB+LOCO), fleongg 피처 추가 전반(mmprof 무시/xtrk 유해/grshape 취약 — likpf quality가 이미 커버), branch midpoint hedge(시드스플릿), c40 컷 제거(+0.15), hard-well 가중(+0.14, 몬스터 우물조차 악화), 채널 드롭아웃(클린에서 역전), 6-leg tvt(상관 상승), heel blend, 마스터 로그 확장(수혜 모집단 0/276), σ-temper ×1.3(실효 selector 비중 14%라 기대 −0.006, 보류), balanced/aggressive gold(히든 우물 유해).
