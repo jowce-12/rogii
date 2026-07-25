@@ -33,6 +33,22 @@ LB 최고 기록 **6.663** (dip pole 시절). public 1위 6.568 (ultimate 포크
 5. **한 제출에 한 델타** — patch42(gold 풀 확장)를 검증 없이 LB 직행시켜 슬롯 태운 전례. 프리뷰 확인 라인 목록을 매 제출 전 대조.
 6. LB 노이즈 ±0.07. 하네스→LB 전이율은 비-spatial 축에서 대략 50~100%.
 
+## 최우선 경고: 폴드 누수 사고 (2026-07-25) — 반드시 읽을 것
+
+**원인**: `GroupKFold(5).split(wells)`의 배정이 **sklearn 버전마다 다르다**. 학습 환경 isic(sklearn 1.7.2)과 판정 환경 Windows(1.8.0)이 **773우물 중 584개(75.5%)에서 다른 폴드**를 배정했다. 체크포인트는 isic 배정으로 학습됐으므로, Windows에서 만든 클린 OOF는 대부분의 우물을 **그 우물로 학습한 모델**로 평가한 누수본이었다(≈1.7ft 낙관 편향).
+
+**판별 근거(실측)**: 우물별로 5개 폴드 모델을 모두 돌려 "가장 못 맞추는 폴드 = 진짜 held-out"을 찾으면 isic 배정 9/12 일치, Windows 배정 1/12.
+
+**조치**:
+- 정본 폴드를 **`gru_folds.json`** 으로 고정. `train_gru2.py`·`parity_*`·`recompute_honest.py`는 이 파일을 읽고, 없으면 만들어 저장한다. **로컬 sklearn으로 재계산 금지.**
+- 누수 산출물은 `_leaked_quarantine/`로 격리(dipfused, dipfused5, spatial*, fused_x3/mix8/ca5, loco, testbank).
+- 폴드를 재계산하던 스크립트 삭제: `gru_fusion*.py`, `recompute_gru_oof*.py`, `judge_spatial.py`. 정본 경로는 **`recompute_honest.py`** 하나.
+- 정직한 참조본: `gru_oof_dip3_isic_honest.parquet`(8.0990), `gru_oof_dipfused_0721evidence.parquet`(8.1055).
+
+**뒤집힌 결론**: "GPU forward가 GRU를 1.7ft 손상시킨다"는 **틀렸다**. 그 1.7ft는 GPU 손상이 아니라 내 쪽 폴드 누수였다. isic 산출물이 정직한 쪽이었다. Kaggle 체크섬(11906.4454)은 양 환경에서 모두 일치 — 테스트 우물은 폴드가 개입하지 않아 이 결함을 잡지 못하는 검증이었다.
+
+**영향**: patch49/50(가중치를 GRU로 이동)은 부풀려진 pole 위에서 튜닝됨. 단 **LB에서 GRU 가중 상향은 실제로 효과가 확인됨**(사용자 보고) → 방향은 유효, 최적점만 정직한 재계산으로 다시 잡는 중.
+
 ## 정정: 아티팩트 오염 사고 (2026-07-25) — 반드시 읽을 것
 
 `gru_oof_dipfused_ext.parquet`(내 CPU 산출물)이 사용자의 GPU 재실행에 **조용히 덮어써졌고**(같은 공유 디렉토리), 로그에는 CPU 숫자가 남아 있어 발견이 늦었다. 그 결과 "dip5 채택(−0.67/−0.45)"은 **CPU dip5 vs GPU dip3** 비교였고 대부분이 GPU forward 손상(~1.7ft)이었다. 파일은 `*.GPU_CONTAMINATED.parquet`로 격리.

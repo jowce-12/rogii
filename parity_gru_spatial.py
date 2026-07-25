@@ -1,3 +1,4 @@
+import os
 # Parity for the SPATIAL deployment path: live spatial_bank/spatial_query + gru_channels
 # (spatial_src) + gru_forward(_sa/_sb/_sc) + fuse(1024) vs training artifacts
 # (gru_spatial_fold{f}.parquet src values, gru_oof_spatialfused.parquet outputs).
@@ -25,9 +26,21 @@ rowmap = pd.read_parquet("gru_rowmap.parquet")
 ref = pd.read_parquet("gru_oof_spatialfused.parquet").set_index("id")["gru_d"]
 wells = sorted(rowmap["well"].unique())
 fold_of = {}
-for f, (_, va) in enumerate(GroupKFold(5).split(wells, groups=wells)):
-    for i in va:
-        fold_of[wells[i]] = f
+_FOLD_FILE = "gru_folds.json"
+if os.path.exists(_FOLD_FILE):
+    # PINNED: sklearn 1.7.2 vs 1.8.0 disagree on 75.5% of GroupKFold assignments, which
+    # silently evaluates a well with a model that trained on it. The canonical map comes
+    # from the env that trained the checkpoints; never re-derive it locally.
+    import json as _fjson
+    fold_of = {k: int(v) for k, v in _fjson.load(open(_FOLD_FILE)).items()}
+    print(f"[folds] pinned from {_FOLD_FILE} ({len(fold_of)} wells)", flush=True)
+else:
+    for f, (_, va) in enumerate(GroupKFold(5).split(wells, groups=wells)):
+        for i in va:
+            fold_of[wells[i]] = f
+    import json as _fjson
+    _fjson.dump(fold_of, open(_FOLD_FILE, "w"))
+    print(f"[folds] derived and WROTE {_FOLD_FILE} ({len(fold_of)} wells)", flush=True)
 
 for wid in [wells[10], wells[400]]:
     f = fold_of[wid]

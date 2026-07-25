@@ -1,3 +1,4 @@
+import os
 # Whole-well bi-GRU v2 (radiantallomancer recipe; NOT the dead Option-C train_gru.py —
 # that one windowed rows with likpf features; this one is whole-well samples with
 # prefix-cut augmentation, typewell-mismatch channels, and per-cut stride decodes).
@@ -121,9 +122,21 @@ if DROPCUTS:
     print(f"[{time.time()-t0:.0f}s] dropcuts {sorted(DROPCUTS)}: {n0} -> {len(samples)} samples", flush=True)
 wells = sorted({s["well"] for s in samples})
 fold_of = {}
-for f, (_, va) in enumerate(GroupKFold(5).split(wells, groups=wells)):
-    for i in va:
-        fold_of[wells[i]] = f
+_FOLD_FILE = "gru_folds.json"
+if os.path.exists(_FOLD_FILE):
+    # PINNED: sklearn 1.7.2 vs 1.8.0 disagree on 75.5% of GroupKFold assignments, which
+    # silently evaluates a well with a model that trained on it. The canonical map comes
+    # from the env that trained the checkpoints; never re-derive it locally.
+    import json as _fjson
+    fold_of = {k: int(v) for k, v in _fjson.load(open(_FOLD_FILE)).items()}
+    print(f"[folds] pinned from {_FOLD_FILE} ({len(fold_of)} wells)", flush=True)
+else:
+    for f, (_, va) in enumerate(GroupKFold(5).split(wells, groups=wells)):
+        for i in va:
+            fold_of[wells[i]] = f
+    import json as _fjson
+    _fjson.dump(fold_of, open(_FOLD_FILE, "w"))
+    print(f"[folds] derived and WROTE {_FOLD_FILE} ({len(fold_of)} wells)", flush=True)
 rm_by_well = {w: g for w, g in rowmap.groupby("well")}
 if WELLW > 0:
     _risk = pd.read_parquet("train_features_v7_f1_cblend_w773.parquet",
