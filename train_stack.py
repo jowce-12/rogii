@@ -1083,33 +1083,40 @@ gc.collect()
 # top-32 beams temp=8 posterior; stiff=seg_len 400, loose=seg_len 100).
 # HARD requirement, no silent presence-gate (warp lesson): a missing/incomplete join
 # must kill the run, not quietly train a reduced-feature model.
-STRIDE_COLS = ["stride_d", "stride_best_d", "stride_stiff_d", "stride_loose_d"]
-_sj = pd.read_parquet("stride_join.parquet")
+# 2026-07-25: the four v1 decode columns are REPLACED by the single STRIDE-v3 decode.
+# 150-well proxy (identical folds/params): v1 cols 6.8736 | no stride at all 7.0509 |
+# v3 alone 6.8241 -> one v3 column beats the four v1 columns (importance rank 2/260).
+# Keeping BOTH was much worse (7.1232): the v1-v3 disagreement acts as an attractive
+# nuisance, the same failure mode that killed the xtrk features.
+# PAIRED CHANGE: the submission notebook must feed the same s3_d column (patch51 reuses
+# the v3 decode patch48 already runs per well, so inference cost is zero).
+STRIDE_COLS = ["s3_d"]
+_sj = pd.read_parquet("s3_all.parquet")
 assert all(c in _sj.columns for c in STRIDE_COLS), \
-    f"stride_join.parquet cols {list(_sj.columns)} — rebuild with build_stride_train_v2.py"
+    f"s3_all.parquet cols {list(_sj.columns)} — rebuild with gen_v3_all.py"
 train_df = train_df.merge(_sj, on="id", how="left")
-_scov = float(train_df["stride_d"].notna().mean())
-assert _scov > 0.95, f"stride_join.parquet coverage {_scov:.3f} — rebuild with build_stride_train_v2.py"
-# test side: computed live by the SAME code that built the train columns
+_scov = float(train_df["s3_d"].notna().mean())
+assert _scov > 0.95, f"s3_all.parquet coverage {_scov:.3f} — rebuild with gen_v3_all.py"
+# test side: computed live by the SAME decoder that built the train column
+import sys as _s3_sys
+_s3_argv = _s3_sys.argv
+_s3_sys.argv = ["x", "--wlen", "0.5"]
+import stride3 as _stride3_mod
+_s3_sys.argv = _s3_argv
 import stride as _stride_mod
 _srows = []
 for _swid in sorted(test_df["well"].unique()):
     _shw, _stw = _stride_mod.load_well(_swid, "test")
-    _sp, _sinfo = _stride_mod.stride_track(_shw, _stw)
+    _sp = _stride3_mod.decode(_shw, _stw)
     if _sp is None:
         continue
     _sev = _shw[_shw["TVT_input"].isna()]
     _slast = float(_shw[_shw["TVT_input"].notna()]["TVT_input"].iloc[-1])
-    _row = {"id": [f"{_swid}_{_si}" for _si in _sev.index],
-            "stride_d": (_sp - _slast).astype(np.float32),
-            "stride_best_d": (_sinfo["tvt_best"] - _slast).astype(np.float32)}
-    for _snm, _sseg in (("stride_stiff_d", 400.0), ("stride_loose_d", 100.0)):
-        _spv, _ = _stride_mod.stride_track(_shw, _stw, seg_len=_sseg)
-        _row[_snm] = (_spv - _slast).astype(np.float32) if _spv is not None else np.float32(np.nan)
-    _srows.append(pd.DataFrame(_row))
+    _srows.append(pd.DataFrame({"id": [f"{_swid}_{_si}" for _si in _sev.index],
+                                "s3_d": (np.asarray(_sp, float) - _slast).astype(np.float32)}))
 if _srows:
     test_df = test_df.merge(pd.concat(_srows, ignore_index=True), on="id", how="left")
-print(f"[stride-feat] train coverage {_scov:.3f} (4 cols) | test wells joined {len(_srows)}", flush=True)
+print(f"[stride-feat] v3 train coverage {_scov:.3f} (1 col) | test wells joined {len(_srows)}", flush=True)
 
 feats = [c for c in train_df.columns if c not in {"well", "id", "target"}
          and not (c.startswith("likpf_scale_") and not c.endswith("_d"))   # keep scale DELTAS (validated -0.45 OOF)
